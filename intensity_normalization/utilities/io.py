@@ -49,3 +49,28 @@ def glob_nii(dir):
     """ return a sorted list of nifti files for a given directory """
     fns = sorted(glob(os.path.join(dir, '*.nii*')))
     return fns
+
+
+def get_mask_fns(mask_dir, input_files):
+    """ Select masks matching the input file for each input img
+    """
+    mask_files = []
+    for input_fn in input_files:
+        path, base, ext = split_filename(input_fn)
+        underscore_split = base.split("_")
+        sub_str = underscore_split[0]
+        dash_split = sub_str.split("-")
+        sub_num = dash_split[1]
+        mask_pattern = f'rsub-{sub_num}_*-label.nii'
+        possible_masks = glob(os.path.join(mask_dir, mask_pattern))
+        mask_fn = possible_masks[0]
+        mask_files.append(mask_fn)
+
+        print(f"sub_num: {sub_num}")
+        print(f"possible masks: {mask_files} ")
+        print(f"selected mask: {mask_fn} ")
+        print("--------------")
+
+    print(f"total mask files found {mask_files}")
+    mask_files = sorted(mask_files)
+    return sorted(mask_files)

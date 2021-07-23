@@ -33,7 +33,11 @@ from intensity_normalization.utilities import io
 logger = logging.getLogger(__name__)
 
 
-def nyul_normalize(img_dir, mask_dir=None, output_dir=None, standard_hist=None, write_to_disk=True):
+def nyul_normalize(img_dir,
+                   mask_dir=None,
+                   output_dir=None,
+                   standard_hist=None,
+                   write_to_disk=True):
     """
     Use Nyul and Udupa method ([1,2]) to normalize the intensities of a set of MR images
 
@@ -67,8 +71,12 @@ def nyul_normalize(img_dir, mask_dir=None, output_dir=None, standard_hist=None, 
             out_fns.append(os.path.join(output_dir, base + '_hm' + ext))
         if not os.path.exists(output_dir):
             os.mkdir(output_dir)
+        if not os.path.exists(os.path.join(output_dir, 'cropped')):
+            os.mkdir(os.path.join(output_dir, 'cropped'))
 
-    mask_files = [None] * len(input_files) if mask_dir is None else io.glob_nii(mask_dir)
+    # mask_files = [None] * len(input_files) if mask_dir is None else io.glob_nii(mask_dir)
+    mask_files = io.get_mask_fns(mask_dir, input_files)
+    print(mask_files)
 
     if standard_hist is None:
         logger.info('Learning standard scale for the set of images')
@@ -78,18 +86,33 @@ def nyul_normalize(img_dir, mask_dir=None, output_dir=None, standard_hist=None, 
         standard_scale, percs = train(input_files, mask_files)
         np.save(standard_hist, np.vstack((standard_scale, percs)))
     else:
-        logger.info('Loading standard scale ({}) for the set of images'.format(standard_hist))
+        logger.info('Loading standard scale ({}) for the set of images'.format(
+            standard_hist))
         standard_scale, percs = np.load(standard_hist)
 
     normalized = None
-    for i, (img_fn, mask_fn, out_fn) in enumerate(zip(input_files, mask_files, out_fns)):
+
+    for i, (img_fn, mask_fn,
+            out_fn) in enumerate(zip(input_files, mask_files, out_fns)):
+
+        print(f"image: {img_fn}")
+        print(f"mask: {mask_fn}")
+        print(f"out: {out_fn}")
+
         _, base, _ = io.split_filename(img_fn)
-        logger.info('Transforming image {} to standard scale ({:d}/{:d})'.format(base, i + 1, len(input_files)))
+        logger.info(
+            'Transforming image {} to standard scale ({:d}/{:d})'.format(
+                base, i + 1, len(input_files)))
         img = io.open_nii(img_fn)
         mask = io.open_nii(mask_fn) if mask_fn is not None else None
-        normalized = do_hist_norm(img, percs, standard_scale, mask)
+        normalized, cropped = do_hist_norm(img, percs, standard_scale, mask)
         if write_to_disk:
             io.save_nii(normalized, out_fn, is_nii=True)
+
+            _, base, ext = io.split_filename(out_fn)
+            crop_fn = os.path.join(output_dir, 'cropped',
+                                   base + '_hm_crop' + ext)
+            io.save_nii(cropped, crop_fn, is_nii=True)
 
     return normalized
 
@@ -109,7 +132,15 @@ def get_landmarks(img, percs):
     return landmarks
 
 
-def train(img_fns, mask_fns=None, i_min=1, i_max=99, i_s_min=1, i_s_max=100, l_percentile=10, u_percentile=90, step=10):
+def train(img_fns,
+          mask_fns=None,
+          i_min=1,
+          i_max=99,
+          i_s_min=1,
+          i_s_max=100,
+          l_percentile=10,
+          u_percentile=90,
+          step=10):
     """
     determine the standard scale for the set of images
 
@@ -129,12 +160,15 @@ def train(img_fns, mask_fns=None, i_min=1, i_max=99, i_s_min=1, i_s_max=100, l_p
         percs (np.ndarray): array of all percentiles used
     """
     mask_fns = [None] * len(img_fns) if mask_fns is None else mask_fns
-    percs = np.concatenate(([i_min], np.arange(l_percentile, u_percentile + 1, step), [i_max]))
+    percs = np.concatenate(
+        ([i_min], np.arange(l_percentile, u_percentile + 1, step), [i_max]))
     standard_scale = np.zeros(len(percs))
+
     for i, (img_fn, mask_fn) in enumerate(zip(img_fns, mask_fns)):
         img_data = io.open_nii(img_fn).get_fdata()
         mask = io.open_nii(mask_fn) if mask_fn is not None else None
-        mask_data = img_data > img_data.mean() if mask is None else mask.get_fdata()
+        mask_data = img_data > img_data.mean(
+        ) if mask is None else mask.get_fdata()
         masked = img_data[mask_data > 0]
         landmarks = get_landmarks(masked, percs)
         min_p = np.percentile(masked, i_min)
@@ -160,9 +194,18 @@ def do_hist_norm(img, landmark_percs, standard_scale, mask=None):
         normalized (nibabel.nifti1.Nifti1Image): normalized image
     """
     img_data = img.get_fdata()
-    mask_data = img_data > img_data.mean() if mask is None else mask.get_fdata()
+    mask_data = img_data > img_data.mean() if mask is None else mask.get_fdata(
+    )
     masked = img_data[mask_data > 0]
     landmarks = get_landmarks(masked, landmark_percs)
     f = interp1d(landmarks, standard_scale, fill_value='extrapolate')
     normed = f(img_data)
-    return nib.Nifti1Image(normed, img.affine, img.header)
+    mask = (mask_data > 0).astype(int)
+    mask = mask.astype('float')
+    mask[mask == 0] = np.nan
+    crop_img = np.multiply(normed, mask)
+
+    norm_nii = nib.Nifti1Image(normed, img.affine, img.header)
+    crop_nii = nib.Nifti1Image(crop_img, img.affine, img.header)
+
+    return norm_nii, crop_nii
