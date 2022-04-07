@@ -95,17 +95,15 @@ def nyul_normalize(img_dir,
     for i, (img_fn, mask_fn,
             out_fn) in enumerate(zip(input_files, mask_files, out_fns)):
 
-        print(f"image: {img_fn}")
-        print(f"mask: {mask_fn}")
-        print(f"out: {out_fn}")
-
         _, base, _ = io.split_filename(img_fn)
         logger.info(
             'Transforming image {} to standard scale ({:d}/{:d})'.format(
                 base, i + 1, len(input_files)))
         img = io.open_nii(img_fn)
         mask = io.open_nii(mask_fn) if mask_fn is not None else None
+        print(f"for {base}:")
         normalized, cropped = do_hist_norm(img, percs, standard_scale, mask)
+
         if write_to_disk:
             io.save_nii(normalized, out_fn, is_nii=True)
 
@@ -182,7 +180,8 @@ def train(img_fns,
 
 def do_hist_norm(img, landmark_percs, standard_scale, mask=None):
     """
-    do the Nyul and Udupa histogram normalization routine with a given set of learned landmarks
+    do the Nyul and Udupa histogram normalization routine
+    with a given set of learned landmarks
 
     Args:
         img (nibabel.nifti1.Nifti1Image): image on which to find landmarks
@@ -201,9 +200,14 @@ def do_hist_norm(img, landmark_percs, standard_scale, mask=None):
     f = interp1d(landmarks, standard_scale, fill_value='extrapolate')
     normed = f(img_data)
     mask = (mask_data > 0).astype(int)
+    total = mask.sum()
     mask = mask.astype('float')
     mask[mask == 0] = np.nan
     crop_img = np.multiply(normed, mask)
+
+    n_vess = (crop_img > 30).sum()
+    percent = n_vess / total
+    print(f"{percent}% vessels")
 
     norm_nii = nib.Nifti1Image(normed, img.affine, img.header)
     crop_nii = nib.Nifti1Image(crop_img, img.affine, img.header)
